@@ -1,0 +1,38 @@
+{
+  "knowledge_base_name": "林君璇企業求職 LINE Bot 知識庫",
+  "version": "0.1.0",
+  "language": "zh-TW",
+  "last_updated": "2026-08-21",
+  "documents": [
+    {"path": "00_answer_policy.md", "index": true, "priority": 100},
+    {"path": "01_profile.md", "index": true, "priority": 90},
+    {"path": "02_skills.md", "index": true, "priority": 85},
+    {"path": "03_work_experience.md", "index": true, "priority": 80},
+    {"path": "04_education_and_transition.md", "index": true, "priority": 80},
+    {"path": "projects/05_seer.md", "index": true, "priority": 90},
+    {"path": "projects/06_linebot_portfolio.md", "index": true, "priority": 75},
+    {"path": "07_job_preferences.md", "index": true, "priority": 75},
+    {"path": "08_faq.md", "index": true, "priority": 95},
+    {"path": "09_missing_information.md", "index": false, "priority": 0}
+  ],
+  "retrieval": {
+    "chunk_by": "markdown_heading",
+    "top_k": 5,
+    "require_source_ids": true,
+    "similarity_threshold": "calibrate_with_test_questions",
+    "unknown_action": "store_for_admin_review"
+  },
+  "privacy": {
+    "public_only": true,
+    "do_not_infer_missing_fields": true,
+    "excluded_categories": [
+      "government_id",
+      "home_address",
+      "private_phone",
+      "birthday",
+      "health",
+      "relationship",
+      "financial_information"
+    ]
+  }
+}

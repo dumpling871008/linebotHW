@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+.pytest_cache/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+
+
+# env files
+.env
+
+# Generated RAG index backups
+storage/rag_index_backup_*/

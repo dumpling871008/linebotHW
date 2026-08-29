@@ -1,0 +1,151 @@
+import os
+from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock
+
+
+os.environ.setdefault("LINE_CHANNEL_SECRET", "test-channel-secret")
+os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "test-channel-access-token")
+
+import app as app_module  # noqa: E402
+
+
+def test_get_line_display_name() -> None:
+    messaging_api = Mock()
+    messaging_api.get_profile.return_value = SimpleNamespace(
+        display_name=" 招募小編 "
+    )
+
+    display_name = app_module.get_line_display_name(messaging_api, "U123")
+
+    assert display_name == "招募小編"
+    messaging_api.get_profile.assert_called_once_with("U123")
+
+
+def test_get_line_display_name_failure_returns_none() -> None:
+    messaging_api = Mock()
+    messaging_api.get_profile.side_effect = RuntimeError("profile unavailable")
+
+    display_name = app_module.get_line_display_name(messaging_api, "U123")
+
+    assert display_name is None
+
+
+def test_handle_text_message_uses_profile_and_career_service(monkeypatch) -> None:
+    service = Mock()
+    service.handle_message.return_value = SimpleNamespace(
+        route=SimpleNamespace(value="ANSWER"),
+        response="知識庫回答",
+        source_ids=["01_profile.001"],
+        unknown_question_id=None,
+    )
+    messaging_api = Mock()
+    messaging_api.get_profile.return_value = SimpleNamespace(
+        display_name="招募小編"
+    )
+    api_client_context = MagicMock()
+
+    monkeypatch.setattr(
+        app_module,
+        "get_career_bot_service",
+        Mock(return_value=service),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "ApiClient",
+        Mock(return_value=api_client_context),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "MessagingApi",
+        Mock(return_value=messaging_api),
+    )
+
+    event = SimpleNamespace(
+        message=SimpleNamespace(text=" 請介紹林君璇 "),
+        source=SimpleNamespace(user_id="U123"),
+        reply_token="reply-token",
+    )
+
+    app_module.handle_text_message(event)
+
+    service.handle_message.assert_called_once_with(
+        question="請介紹林君璇",
+        line_user_id="U123",
+        display_name="招募小編",
+    )
+    reply_request = messaging_api.reply_message.call_args.args[0]
+    assert reply_request.reply_token == "reply-token"
+    assert reply_request.messages[0].text == "知識庫回答"
+
+
+def test_flask_routes() -> None:
+    client = app_module.app.test_client()
+
+    assert client.get("/").status_code == 200
+    assert client.post("/callback", data="{}").status_code == 400
+
+
+def test_chat_api_uses_existing_career_service(monkeypatch) -> None:
+    service = Mock()
+    service.handle_message.return_value = SimpleNamespace(
+        route=SimpleNamespace(value="ANSWER"),
+        response="網站知識庫回答",
+        source_ids=["01_profile.001"],
+    )
+    monkeypatch.setattr(
+        app_module,
+        "get_career_bot_service",
+        Mock(return_value=service),
+    )
+    client = app_module.app.test_client()
+    allowed_origin = app_module.cors_allowed_origins[0]
+
+    response = client.post(
+        "/api/chat",
+        json={"question": " 請介紹林君璇 "},
+        headers={"Origin": allowed_origin},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "response": "網站知識庫回答",
+        "route": "ANSWER",
+        "source_ids": ["01_profile.001"],
+    }
+    assert response.headers["Access-Control-Allow-Origin"] == allowed_origin
+    service.handle_message.assert_called_once_with(
+        question="請介紹林君璇",
+        line_user_id=None,
+        display_name=None,
+        channel="website",
+    )
+
+
+def test_chat_api_rejects_invalid_json_and_question() -> None:
+    client = app_module.app.test_client()
+
+    assert client.post("/api/chat", data="not-json").status_code == 400
+    assert client.post("/api/chat", json={}).status_code == 400
+    assert client.post("/api/chat", json={"question": "   "}).status_code == 400
+    assert client.post(
+        "/api/chat",
+        json={"question": "問" * 501},
+    ).status_code == 400
+
+
+def test_chat_api_returns_503_when_service_fails(monkeypatch) -> None:
+    service = Mock()
+    service.handle_message.side_effect = RuntimeError("service unavailable")
+    monkeypatch.setattr(
+        app_module,
+        "get_career_bot_service",
+        Mock(return_value=service),
+    )
+    client = app_module.app.test_client()
+
+    response = client.post("/api/chat", json={"question": "請介紹林君璇"})
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "AI 服務暫時無法使用，請稍後再試。"
+    }

@@ -1,0 +1,21 @@
+.git
+.gitignore
+.venv
+.pytest_cache
+__pycache__
+*.py[cod]
+*.egg-info
+
+.env
+.env.*
+*.pem
+*.key
+**/*credentials*.json
+**/*service-account*.json
+**/*service_account*.json
+
+tests
+test_gemini.py
+storage/rag_index_backup_*
+
+# storage/rag_index is intentionally included: RagService loads it at runtime.
