@@ -30,20 +30,36 @@ if not line_channel_access_token:
 
 app = Flask(__name__)
 
-cors_allowed_origins = [
-    origin.strip()
-    for origin in os.getenv(
+
+def parse_cors_allowed_origins(value: str | None) -> list[str]:
+    """解析逗號分隔的前端 origin，並拒絕不安全的萬用字元。"""
+
+    origins = [
+        origin.strip().rstrip("/")
+        for origin in (value or "").split(",")
+        if origin.strip()
+    ]
+    if "*" in origins:
+        raise ValueError(
+            "CORS_ALLOWED_ORIGINS 不可使用 *，請明確列出允許的網站 origin"
+        )
+    return list(dict.fromkeys(origins))
+
+
+cors_allowed_origins = parse_cors_allowed_origins(
+    os.getenv(
         "CORS_ALLOWED_ORIGINS",
         "http://localhost:4321",
-    ).split(",")
-    if origin.strip()
-]
+    )
+)
 
 CORS(
     app,
     resources={
-        r"/api/*": {
+        r"/api/chat": {
             "origins": cors_allowed_origins,
+            "methods": ["POST", "OPTIONS"],
+            "allow_headers": ["Content-Type"],
         }
     },
 )
@@ -91,8 +107,11 @@ def index():
     return "LINE Career Bot is running!"
 
 
-@app.post("/api/chat")
+@app.route("/api/chat", methods=["POST", "OPTIONS"])
 def chat():
+    if request.method == "OPTIONS":
+        return "", 204
+
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({

@@ -2,11 +2,28 @@ import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
+import pytest
+
 
 os.environ.setdefault("LINE_CHANNEL_SECRET", "test-channel-secret")
 os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "test-channel-access-token")
 
 import app as app_module  # noqa: E402
+
+
+def test_parse_cors_allowed_origins_supports_multiple_origins() -> None:
+    assert app_module.parse_cors_allowed_origins(
+        " https://portfolio.example.com/, http://localhost:4321, "
+        "https://portfolio.example.com "
+    ) == [
+        "https://portfolio.example.com",
+        "http://localhost:4321",
+    ]
+
+
+def test_parse_cors_allowed_origins_rejects_wildcard() -> None:
+    with pytest.raises(ValueError, match="不可使用 \\*"):
+        app_module.parse_cors_allowed_origins("https://example.com,*")
 
 
 def test_get_line_display_name() -> None:
@@ -119,6 +136,43 @@ def test_chat_api_uses_existing_career_service(monkeypatch) -> None:
         display_name=None,
         channel="website",
     )
+
+
+def test_chat_api_allows_json_preflight_for_configured_origin() -> None:
+    client = app_module.app.test_client()
+    allowed_origin = app_module.cors_allowed_origins[0]
+
+    response = client.options(
+        "/api/chat",
+        headers={
+            "Origin": allowed_origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.headers["Access-Control-Allow-Origin"] == allowed_origin
+    assert "POST" in response.headers["Access-Control-Allow-Methods"]
+    assert "content-type" in response.headers[
+        "Access-Control-Allow-Headers"
+    ].lower()
+
+
+def test_chat_api_does_not_allow_unconfigured_origin() -> None:
+    client = app_module.app.test_client()
+
+    response = client.options(
+        "/api/chat",
+        headers={
+            "Origin": "https://untrusted.example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+
+    assert response.status_code == 204
+    assert "Access-Control-Allow-Origin" not in response.headers
 
 
 def test_chat_api_rejects_invalid_json_and_question() -> None:
