@@ -203,3 +203,112 @@ def test_chat_api_returns_503_when_service_fails(monkeypatch) -> None:
     assert response.get_json() == {
         "error": "AI 服務暫時無法使用，請稍後再試。"
     }
+
+
+def test_message_api_stores_private_message(monkeypatch) -> None:
+    service = Mock()
+    service.submit.return_value = "message-document-id"
+    monkeypatch.setattr(
+        app_module,
+        "get_website_message_service",
+        Mock(return_value=service),
+    )
+    client = app_module.app.test_client()
+    allowed_origin = app_module.cors_allowed_origins[0]
+
+    response = client.post(
+        "/api/messages",
+        json={
+            "name": "王小明",
+            "email": "hello@example.com",
+            "topic": "collaboration",
+            "message": "想和你聊聊一個資料平台合作機會。",
+            "website": "",
+            "turnstile_token": "verified-token",
+        },
+        headers={
+            "Origin": allowed_origin,
+            "X-Forwarded-For": "198.51.100.4, 203.0.113.8, 10.0.0.1",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.get_json() == {"message": "留言已送出，謝謝你！"}
+    assert response.headers["Access-Control-Allow-Origin"] == allowed_origin
+    service.submit.assert_called_once()
+    assert service.submit.call_args.args[1] == "203.0.113.8"
+
+
+def test_message_api_allows_json_preflight() -> None:
+    client = app_module.app.test_client()
+    allowed_origin = app_module.cors_allowed_origins[0]
+
+    response = client.options(
+        "/api/messages",
+        headers={
+            "Origin": allowed_origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+
+    assert response.status_code == 204
+    assert response.headers["Access-Control-Allow-Origin"] == allowed_origin
+    assert "POST" in response.headers["Access-Control-Allow-Methods"]
+    assert "content-type" in response.headers[
+        "Access-Control-Allow-Headers"
+    ].lower()
+
+
+def test_message_api_returns_validation_error(monkeypatch) -> None:
+    service = Mock()
+    service.submit.side_effect = app_module.WebsiteMessageValidationError(
+        "請輸入有效的 Email。"
+    )
+    monkeypatch.setattr(
+        app_module,
+        "get_website_message_service",
+        Mock(return_value=service),
+    )
+    client = app_module.app.test_client()
+
+    response = client.post("/api/messages", json={"email": "wrong"})
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "請輸入有效的 Email。"}
+
+
+def test_message_api_rate_limit(monkeypatch) -> None:
+    service = Mock()
+    service.submit.side_effect = app_module.WebsiteMessageRateLimitExceeded
+    monkeypatch.setattr(
+        app_module,
+        "get_website_message_service",
+        Mock(return_value=service),
+    )
+    client = app_module.app.test_client()
+
+    response = client.post("/api/messages", json={})
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "3600"
+
+
+def test_message_api_service_unavailable(monkeypatch) -> None:
+    service = Mock()
+    service.submit.side_effect = app_module.WebsiteMessageServiceUnavailable(
+        "Firestore unavailable"
+    )
+    monkeypatch.setattr(
+        app_module,
+        "get_website_message_service",
+        Mock(return_value=service),
+    )
+    client = app_module.app.test_client()
+
+    response = client.post("/api/messages", json={})
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "留言服務暫時無法使用，請稍後再試。"
+    }

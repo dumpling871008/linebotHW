@@ -16,6 +16,12 @@ from linebot.v3.webhook import WebhookHandler
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 from career_bot_service import CareerBotService
+from website_message_service import (
+    WebsiteMessageRateLimitExceeded,
+    WebsiteMessageServiceUnavailable,
+    WebsiteMessageValidationError,
+    get_website_message_service,
+)
 
 load_dotenv()
 
@@ -60,7 +66,12 @@ CORS(
             "origins": cors_allowed_origins,
             "methods": ["POST", "OPTIONS"],
             "allow_headers": ["Content-Type"],
-        }
+        },
+        r"/api/messages": {
+            "origins": cors_allowed_origins,
+            "methods": ["POST", "OPTIONS"],
+            "allow_headers": ["Content-Type"],
+        },
     },
 )
 
@@ -156,6 +167,59 @@ def chat():
         "response": result.response,
         "source_ids": result.source_ids,
     })
+
+
+def get_client_ip() -> str:
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    forwarded_ips = [
+        value.strip()
+        for value in forwarded_for.split(",")
+        if value.strip()
+    ]
+    # Google Front End 會在尾端加入 client IP 與 proxy IP；忽略前方可偽造值。
+    forwarded_ip = (
+        forwarded_ips[-2]
+        if len(forwarded_ips) >= 2
+        else (forwarded_ips[0] if forwarded_ips else "")
+    )
+    return forwarded_ip or request.remote_addr or "unknown"
+
+
+@app.route("/api/messages", methods=["POST", "OPTIONS"])
+def create_website_message():
+    if request.method == "OPTIONS":
+        return "", 204
+
+    data = request.get_json(silent=True)
+    try:
+        document_id = get_website_message_service(
+            tuple(cors_allowed_origins)
+        ).submit(data, get_client_ip())
+    except WebsiteMessageValidationError as error:
+        return jsonify({"error": str(error)}), 400
+    except WebsiteMessageRateLimitExceeded:
+        response = jsonify({
+            "error": "留言次數較多，請稍後再試。"
+        })
+        response.headers["Retry-After"] = "3600"
+        return response, 429
+    except WebsiteMessageServiceUnavailable:
+        app.logger.exception("私人留言服務設定或外部服務發生錯誤")
+        return jsonify({
+            "error": "留言服務暫時無法使用，請稍後再試。"
+        }), 503
+    except Exception:
+        app.logger.exception("儲存網站私人留言時發生錯誤")
+        return jsonify({
+            "error": "留言服務暫時無法使用，請稍後再試。"
+        }), 503
+
+    if document_id:
+        app.logger.info("網站私人留言已建立：document_id=%s", document_id)
+
+    return jsonify({
+        "message": "留言已送出，謝謝你！"
+    }), 201
 
 
 @app.post("/callback")
