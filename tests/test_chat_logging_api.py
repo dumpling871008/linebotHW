@@ -11,6 +11,17 @@ from career_bot_service import CareerBotService  # noqa: E402
 from question_router import Route, RouterResult  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def chat_rate_limiter(monkeypatch):
+    limiter = Mock()
+    monkeypatch.setattr(
+        app_module,
+        "get_chat_rate_limiter",
+        Mock(return_value=limiter),
+    )
+    return limiter
+
+
 @pytest.fixture
 def service(monkeypatch):
     instance = CareerBotService.__new__(CareerBotService)
@@ -87,7 +98,10 @@ def test_failed_model_request_is_logged_without_changing_api_error(service) -> N
     assert record["error_code"] == "routing_failed"
 
 
-def test_invalid_requests_and_preflight_are_not_logged(service) -> None:
+def test_invalid_requests_and_preflight_are_not_logged(
+    service,
+    chat_rate_limiter,
+) -> None:
     client = app_module.app.test_client()
     assert client.options("/api/chat").status_code == 204
     assert client.post("/api/chat", data="not-json").status_code == 400
@@ -96,6 +110,7 @@ def test_invalid_requests_and_preflight_are_not_logged(service) -> None:
     assert client.post("/api/chat", json={"question": "問" * 501}).status_code == 400
     service.router.route.assert_not_called()
     service.chat_log_repository.create.assert_not_called()
+    chat_rate_limiter.reserve.assert_not_called()
 
 
 def test_no_public_log_listing_route() -> None:

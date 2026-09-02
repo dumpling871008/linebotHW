@@ -11,6 +11,17 @@ os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "test-channel-access-token")
 import app as app_module  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def chat_rate_limiter(monkeypatch):
+    limiter = Mock()
+    monkeypatch.setattr(
+        app_module,
+        "get_chat_rate_limiter",
+        Mock(return_value=limiter),
+    )
+    return limiter
+
+
 def test_parse_cors_allowed_origins_supports_multiple_origins() -> None:
     assert app_module.parse_cors_allowed_origins(
         " https://portfolio.example.com/, http://localhost:4321, "
@@ -102,7 +113,10 @@ def test_flask_routes() -> None:
     assert client.post("/callback", data="{}").status_code == 400
 
 
-def test_chat_api_uses_existing_career_service(monkeypatch) -> None:
+def test_chat_api_uses_existing_career_service(
+    monkeypatch,
+    chat_rate_limiter,
+) -> None:
     service = Mock()
     service.handle_message.return_value = SimpleNamespace(
         route=SimpleNamespace(value="ANSWER"),
@@ -120,7 +134,10 @@ def test_chat_api_uses_existing_career_service(monkeypatch) -> None:
     response = client.post(
         "/api/chat",
         json={"question": " 請介紹林君璇 "},
-        headers={"Origin": allowed_origin},
+        headers={
+            "Origin": allowed_origin,
+            "X-Forwarded-For": "198.51.100.4, 203.0.113.8, 10.0.0.1",
+        },
     )
 
     assert response.status_code == 200
@@ -130,6 +147,7 @@ def test_chat_api_uses_existing_career_service(monkeypatch) -> None:
         "source_ids": ["01_profile.001"],
     }
     assert response.headers["Access-Control-Allow-Origin"] == allowed_origin
+    chat_rate_limiter.reserve.assert_called_once_with("203.0.113.8")
     service.handle_message.assert_called_once_with(
         question="請介紹林君璇",
         line_user_id=None,
@@ -175,7 +193,7 @@ def test_chat_api_does_not_allow_unconfigured_origin() -> None:
     assert "Access-Control-Allow-Origin" not in response.headers
 
 
-def test_chat_api_rejects_invalid_json_and_question() -> None:
+def test_chat_api_rejects_invalid_json_and_question(chat_rate_limiter) -> None:
     client = app_module.app.test_client()
 
     assert client.post("/api/chat", data="not-json").status_code == 400
@@ -185,6 +203,60 @@ def test_chat_api_rejects_invalid_json_and_question() -> None:
         "/api/chat",
         json={"question": "問" * 501},
     ).status_code == 400
+    chat_rate_limiter.reserve.assert_not_called()
+
+
+def test_chat_api_returns_429_before_calling_service(
+    monkeypatch,
+    chat_rate_limiter,
+) -> None:
+    chat_rate_limiter.reserve.side_effect = (
+        app_module.ChatRateLimitExceeded(1234)
+    )
+    service = Mock()
+    monkeypatch.setattr(
+        app_module,
+        "get_career_bot_service",
+        Mock(return_value=service),
+    )
+
+    response = app_module.app.test_client().post(
+        "/api/chat",
+        json={"question": "請介紹林君璇"},
+    )
+
+    assert response.status_code == 429
+    assert response.get_json() == {
+        "error": "詢問次數已達上限，請稍後再試。"
+    }
+    assert response.headers["Retry-After"] == "1234"
+    service.handle_message.assert_not_called()
+
+
+def test_chat_api_fails_closed_when_rate_limiter_is_unavailable(
+    monkeypatch,
+    chat_rate_limiter,
+) -> None:
+    chat_rate_limiter.reserve.side_effect = (
+        app_module.ChatRateLimitUnavailable("Firestore unavailable")
+    )
+    service = Mock()
+    monkeypatch.setattr(
+        app_module,
+        "get_career_bot_service",
+        Mock(return_value=service),
+    )
+
+    response = app_module.app.test_client().post(
+        "/api/chat",
+        json={"question": "請介紹林君璇"},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "AI 服務暫時無法使用，請稍後再試。"
+    }
+    service.handle_message.assert_not_called()
 
 
 def test_chat_api_returns_503_when_service_fails(monkeypatch) -> None:

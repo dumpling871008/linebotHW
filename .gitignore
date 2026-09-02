@@ -21,3 +21,6 @@ wheels/
 
 # Generated RAG index backups
 storage/rag_index_backup_*/
+
+
+PROJECT_REPORT.md

@@ -16,6 +16,11 @@ from linebot.v3.webhook import WebhookHandler
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 from career_bot_service import CareerBotService
+from chat_rate_limiter import (
+    ChatRateLimitExceeded,
+    ChatRateLimitUnavailable,
+    get_chat_rate_limiter,
+)
 from website_message_service import (
     WebsiteMessageRateLimitExceeded,
     WebsiteMessageServiceUnavailable,
@@ -142,6 +147,26 @@ def chat():
         return jsonify({
             "error": "問題不可超過 500 個字。"
         }), 400
+
+    try:
+        get_chat_rate_limiter().reserve(get_client_ip())
+    except ChatRateLimitExceeded as error:
+        response = jsonify({
+            "error": "詢問次數已達上限，請稍後再試。"
+        })
+        response.headers["Retry-After"] = str(error.retry_after_seconds)
+        return response, 429
+    except ChatRateLimitUnavailable:
+        app.logger.exception("網站 AI 限流服務發生錯誤")
+        return jsonify({
+            "error": "AI 服務暫時無法使用，請稍後再試。"
+        }), 503
+    except Exception:
+        # 限流層異常時採 fail-closed，避免失去保護後持續產生模型費用。
+        app.logger.exception("網站 AI 限流服務發生未預期錯誤")
+        return jsonify({
+            "error": "AI 服務暫時無法使用，請稍後再試。"
+        }), 503
 
     try:
         result = get_career_bot_service().handle_message(
